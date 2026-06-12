@@ -103,6 +103,12 @@ func (s *Session) Usage(in, out, cacheRead int64, ctxPct int) {
 	s.Append(Event{T: "usage", In: in, Out: out, CacheRead: cacheRead, CtxPct: ctxPct})
 }
 
+// Compaction records a compaction event (plan §4.1). The transcript is never
+// modified; this event is purely informational for echo and debugging.
+func (s *Session) Compaction(ctxPctAtTrigger int) {
+	s.Append(Event{T: "compaction", CtxPct: ctxPctAtTrigger, TS: now()})
+}
+
 // End writes the end event once and closes the file.
 func (s *Session) End(reason string) {
 	if s.ended {
