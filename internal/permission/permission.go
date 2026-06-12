@@ -26,7 +26,47 @@ func Class(tool string) string {
 
 type Decision struct {
 	Allowed  bool
-	Feedback string // user's one-line reason on [n]
+	Feedback string // user's one-line reason on [n]; "" means generic "denied by user"
+	Exit     bool   // user typed /exit (or stdin closed): end the session
+}
+
+type Answer int
+
+const (
+	AnswerYes Answer = iota
+	AnswerNo
+	AnswerAll
+	AnswerExit
+	AnswerInvalid
+)
+
+// ParseAnswer interprets one line of permission-prompt input:
+// y/n/a case-insensitive, whitespace-trimmed, plus /exit. Anything else
+// is invalid and must re-prompt — never mapped to deny.
+func ParseAnswer(line string) Answer {
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y":
+		return AnswerYes
+	case "n":
+		return AnswerNo
+	case "a":
+		return AnswerAll
+	case "/exit":
+		return AnswerExit
+	default:
+		return AnswerInvalid
+	}
+}
+
+// SanitizeFeedback validates the why-prompt answer before it reaches the
+// model. Empty, whitespace-only, or command-like ("/...") input returns
+// "" — the caller substitutes the generic "denied by user".
+func SanitizeFeedback(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" || strings.HasPrefix(s, "/") {
+		return ""
+	}
+	return s
 }
 
 type Engine struct {
@@ -55,18 +95,31 @@ func (e *Engine) Check(tool, summary string) Decision {
 	if class == "" || e.grants[class] {
 		return Decision{Allowed: true}
 	}
-	fmt.Fprintf(e.out, "\n%s: %s\n[y] run once  [n] deny + tell raqim why  [a] allow all %s this session\n> ", tool, summary, class)
-	line, _ := e.in.ReadString('\n')
-	switch strings.ToLower(strings.TrimSpace(line)) {
-	case "y":
-		return Decision{Allowed: true}
-	case "a":
-		e.grants[class] = true
-		return Decision{Allowed: true}
-	default:
-		fmt.Fprint(e.out, "why? > ")
-		why, _ := e.in.ReadString('\n')
-		return Decision{Allowed: false, Feedback: strings.TrimSpace(why)}
+	exit := Decision{Feedback: "session ending", Exit: true}
+	fmt.Fprintf(e.out, "\n%s: %s\n", tool, summary)
+	for {
+		fmt.Fprintf(e.out, "[y] run once  [n] deny + tell raqim why  [a] allow all %s this session\n> ", class)
+		line, err := e.in.ReadString('\n')
+		if err != nil && strings.TrimSpace(line) == "" {
+			return exit // stdin closed: same semantics as /exit
+		}
+		switch ParseAnswer(line) {
+		case AnswerYes:
+			return Decision{Allowed: true}
+		case AnswerAll:
+			e.grants[class] = true
+			return Decision{Allowed: true}
+		case AnswerExit:
+			return exit
+		case AnswerNo:
+			fmt.Fprint(e.out, "why? > ")
+			why, _ := e.in.ReadString('\n')
+			if ParseAnswer(why) == AnswerExit {
+				return exit
+			}
+			return Decision{Allowed: false, Feedback: SanitizeFeedback(why)}
+		default: // unrecognized: re-prompt, never deny
+		}
 	}
 }
 

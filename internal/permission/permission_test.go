@@ -47,6 +47,115 @@ func TestDenylist(t *testing.T) {
 	}
 }
 
+// Table-driven prompt input parsing: valid, invalid, /exit, whitespace,
+// case variants.
+func TestParseAnswer(t *testing.T) {
+	tests := []struct {
+		in   string
+		want Answer
+	}{
+		{"y", AnswerYes},
+		{"Y", AnswerYes},
+		{"  y  \n", AnswerYes},
+		{"n", AnswerNo},
+		{" N\n", AnswerNo},
+		{"a", AnswerAll},
+		{"A ", AnswerAll},
+		{"/exit", AnswerExit},
+		{" /EXIT \n", AnswerExit},
+		{"exit", AnswerInvalid},
+		{"q", AnswerInvalid},
+		{"yes please", AnswerInvalid},
+		{"yes", AnswerInvalid},
+		{"", AnswerInvalid},
+		{"   \n", AnswerInvalid},
+		{"/quit", AnswerInvalid},
+		{"no", AnswerInvalid},
+	}
+	for _, tt := range tests {
+		t.Run("input "+strings.TrimSpace(tt.in), func(t *testing.T) {
+			if got := ParseAnswer(tt.in); got != tt.want {
+				t.Errorf("ParseAnswer(%q) = %v, want %v", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSanitizeFeedback(t *testing.T) {
+	tests := []struct {
+		in, want string
+	}{
+		{"use the makefile", "use the makefile"},
+		{"  trimmed reason \n", "trimmed reason"},
+		{"", ""},
+		{"   \n", ""},
+		{"/q", ""},
+		{"/help me", ""},
+	}
+	for _, tt := range tests {
+		if got := SanitizeFeedback(tt.in); got != tt.want {
+			t.Errorf("SanitizeFeedback(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestPromptReprompts(t *testing.T) {
+	cwd, raqim := "/tmp/proj", "/tmp/.raqim"
+	// four invalid answers, then a valid y — must re-prompt, never deny
+	out := &strings.Builder{}
+	e := New(bufio.NewReader(strings.NewReader("exit\nq\nyes please\n\ny\n")), out, cwd, raqim)
+	d := e.Check("bash", "ls")
+	if !d.Allowed || d.Exit {
+		t.Errorf("expected allow after re-prompts, got %+v", d)
+	}
+	if n := strings.Count(out.String(), "[y] run once"); n != 5 {
+		t.Errorf("option line printed %d times, want 5 (1 + 4 re-prompts)", n)
+	}
+}
+
+func TestPromptExit(t *testing.T) {
+	cwd, raqim := "/tmp/proj", "/tmp/.raqim"
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"/exit at prompt", "/exit\n"},
+		{"/exit after invalid", "q\n/exit\n"},
+		{"/exit at why-prompt", "n\n/exit\n"},
+		{"stdin closed", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := New(bufio.NewReader(strings.NewReader(tt.input)), &strings.Builder{}, cwd, raqim)
+			d := e.Check("bash", "ls")
+			if !d.Exit || d.Allowed || d.Feedback != "session ending" {
+				t.Errorf("expected exit decision, got %+v", d)
+			}
+		})
+	}
+}
+
+func TestWhyPromptSanitized(t *testing.T) {
+	cwd, raqim := "/tmp/proj", "/tmp/.raqim"
+	tests := []struct {
+		name, input, want string
+	}{
+		{"empty why", "n\n\n", ""},
+		{"whitespace why", "n\n   \n", ""},
+		{"command why", "n\n/q\n", ""},
+		{"real reason", "n\nuse the makefile\n", "use the makefile"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := New(bufio.NewReader(strings.NewReader(tt.input)), &strings.Builder{}, cwd, raqim)
+			d := e.Check("bash", "ls")
+			if d.Allowed || d.Exit || d.Feedback != tt.want {
+				t.Errorf("got %+v, want feedback %q", d, tt.want)
+			}
+		})
+	}
+}
+
 func TestGrantsAndPrompt(t *testing.T) {
 	cwd, raqim := "/tmp/proj", "/tmp/.raqim"
 

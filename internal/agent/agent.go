@@ -20,6 +20,10 @@ import (
 // with reason context_limit and runs the echo pass.
 var ErrContextLimit = errors.New("context limit reached")
 
+// ErrUserExit signals /exit typed at a permission prompt; the caller ends
+// the session with reason exit and runs the echo pass.
+var ErrUserExit = errors.New("user ended session at permission prompt")
+
 const systemPrompt = `you are raqim, a coding harness with persistent memory. you work inside the user's repository: read code before changing it, make minimal correct changes, and verify with the project's own tools (tests, builds) when you can.
 
 tools: read, write, edit, bash, memory_search. tool calls run serially and may be denied by the user; a denial includes their reason — adapt to it instead of retrying. keep bash commands non-interactive.
@@ -75,8 +79,11 @@ func (a *Agent) Turn(ctx context.Context, userText string) error {
 			case anthropic.ToolUseBlock:
 				args := json.RawMessage(v.JSON.Input.Raw())
 				a.Sess.ToolCall(v.ID, v.Name, args)
-				out, ok := a.runTool(v.Name, args)
+				out, ok, exit := a.runTool(v.Name, args)
 				a.Sess.ToolResult(v.ID, ok, out)
+				if exit {
+					return ErrUserExit
+				}
 				if len(out) > session.OutputCap {
 					out = out[:session.OutputCap] + "\n[output truncated]"
 				}
@@ -98,15 +105,17 @@ func (a *Agent) Turn(ctx context.Context, userText string) error {
 	}
 }
 
-func (a *Agent) runTool(name string, args json.RawMessage) (string, bool) {
-	summary := tools.Summary(name, args)
-	d := a.Perm.Check(name, summary)
-	if !d.Allowed {
-		fb := d.Feedback
-		if fb == "" {
-			fb = "no reason given"
-		}
-		return "denied by user: " + fb, false
+func (a *Agent) runTool(name string, args json.RawMessage) (out string, ok, exit bool) {
+	d := a.Perm.Check(name, tools.Summary(name, args))
+	if d.Exit {
+		return "denied by user: session ending", false, true
 	}
-	return tools.Execute(a.ToolCtx, name, args)
+	if !d.Allowed {
+		if d.Feedback == "" {
+			return "denied by user", false, false
+		}
+		return "denied by user: " + d.Feedback, false, false
+	}
+	out, ok = tools.Execute(a.ToolCtx, name, args)
+	return out, ok, false
 }

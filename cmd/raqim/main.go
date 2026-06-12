@@ -120,11 +120,19 @@ func interactive(ctx context.Context, prov provider.Provider, cfg *config.Config
 	}
 	a.Init(memory.Inject(memPath, project, mc.Budgets.InjectTokens))
 
+	// ctrl-c at any prompt state (readline, permission prompt, why-prompt,
+	// mid-api-call): end event + echo pass, then exit. the handler runs in
+	// its own goroutine and calls os.Exit, so a blocked stdin read can
+	// never swallow it.
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-sig
-		sess.End("interrupt") // write the end event before dying
+		fmt.Printf("\n[interrupt — session %s ending, running the echo pass]\n", sess.ID)
+		sess.End("interrupt")
+		if err := echo.Run(ctx, prov, cfg, sess.ID); err != nil {
+			fmt.Fprintf(os.Stderr, "[echo] %v\n", err)
+		}
 		os.Exit(130)
 	}()
 
@@ -135,7 +143,8 @@ func interactive(ctx context.Context, prov provider.Provider, cfg *config.Config
 	}
 
 	if oneShot != "" {
-		if err := a.Turn(ctx, oneShot); err != nil && !errors.Is(err, agent.ErrContextLimit) {
+		err := a.Turn(ctx, oneShot)
+		if err != nil && !errors.Is(err, agent.ErrContextLimit) && !errors.Is(err, agent.ErrUserExit) {
 			sess.End("error")
 			return err
 		}
@@ -157,6 +166,9 @@ func interactive(ctx context.Context, prov provider.Provider, cfg *config.Config
 			if errors.Is(err, agent.ErrContextLimit) {
 				fmt.Println("[context at 95% — hard stop]")
 				return endAndDistill("context_limit")
+			}
+			if errors.Is(err, agent.ErrUserExit) {
+				return endAndDistill("exit")
 			}
 			fmt.Fprintf(os.Stderr, "[error] %v\n", err)
 		}
