@@ -114,7 +114,7 @@ func interactive(ctx context.Context, prov provider.Provider, cfg *config.Config
 	}
 	a := &agent.Agent{
 		Prov: prov, Model: cfg.Model.Agent,
-		Perm: permission.New(os.Stdin, os.Stdout, cwd, config.RaqimDir()),
+		Perm: permission.New(stdin, os.Stdout, cwd, config.RaqimDir()),
 		Sess: sess, Out: os.Stdout, WarnPct: cfg.Context.WarnPct,
 		ToolCtx: &tools.Ctx{Cwd: cwd, MemoryPath: memPath, Project: project, Touched: map[string]bool{}},
 	}

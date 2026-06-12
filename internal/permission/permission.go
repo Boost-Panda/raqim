@@ -37,8 +37,11 @@ type Engine struct {
 	raqimDir string
 }
 
-func New(in io.Reader, out io.Writer, cwd, raqimDir string) *Engine {
-	return &Engine{grants: map[string]bool{}, in: bufio.NewReader(in), out: out, cwd: cwd, raqimDir: raqimDir}
+// New takes an already-buffered reader so the caller's readline loop and
+// the permission prompts share one buffer — two bufio.Readers over the
+// same fd starve each other on piped input.
+func New(in *bufio.Reader, out io.Writer, cwd, raqimDir string) *Engine {
+	return &Engine{grants: map[string]bool{}, in: in, out: out, cwd: cwd, raqimDir: raqimDir}
 }
 
 // Check runs denylist then grants then the interactive prompt.

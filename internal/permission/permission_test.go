@@ -1,6 +1,7 @@
 package permission
 
 import (
+	"bufio"
 	"strings"
 	"testing"
 )
@@ -50,14 +51,14 @@ func TestGrantsAndPrompt(t *testing.T) {
 	cwd, raqim := "/tmp/proj", "/tmp/.raqim"
 
 	// read/memory_search never prompt
-	e := New(strings.NewReader(""), &strings.Builder{}, cwd, raqim)
+	e := New(bufio.NewReader(strings.NewReader("")), &strings.Builder{}, cwd, raqim)
 	if d := e.Check("read", "/x"); !d.Allowed {
 		t.Error("read should auto-allow")
 	}
 
 	// [a] grants the class for the session, but denylist still applies
 	out := &strings.Builder{}
-	e = New(strings.NewReader("a\n"), out, cwd, raqim)
+	e = New(bufio.NewReader(strings.NewReader("a\n")), out, cwd, raqim)
 	if d := e.Check("bash", "ls"); !d.Allowed {
 		t.Error("[a] should allow")
 	}
@@ -69,14 +70,14 @@ func TestGrantsAndPrompt(t *testing.T) {
 	}
 
 	// [n] collects feedback
-	e = New(strings.NewReader("n\nuse the makefile\n"), &strings.Builder{}, cwd, raqim)
+	e = New(bufio.NewReader(strings.NewReader("n\nuse the makefile\n")), &strings.Builder{}, cwd, raqim)
 	d := e.Check("bash", "go build")
 	if d.Allowed || d.Feedback != "use the makefile" {
 		t.Errorf("deny flow: %+v", d)
 	}
 
 	// bash and mutate grants are separate classes
-	e = New(strings.NewReader("a\ny\n"), &strings.Builder{}, cwd, raqim)
+	e = New(bufio.NewReader(strings.NewReader("a\ny\n")), &strings.Builder{}, cwd, raqim)
 	e.Check("bash", "ls")
 	if d := e.Check("write", "/tmp/proj/f.go"); !d.Allowed {
 		t.Error("mutate prompt should have been answered y")
