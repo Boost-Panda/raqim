@@ -10,6 +10,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 
+	"github.com/aliirz/raqim/internal/compaction"
 	"github.com/aliirz/raqim/internal/permission"
 	"github.com/aliirz/raqim/internal/provider"
 	"github.com/aliirz/raqim/internal/session"
@@ -41,9 +42,11 @@ type Agent struct {
 	Out     io.Writer
 	WarnPct int
 
-	system []anthropic.TextBlockParam
-	msgs   []anthropic.MessageParam
-	warned bool
+	system    []anthropic.TextBlockParam
+	msgs      []anthropic.MessageParam // provider view: what gets sent each request
+	turnMsgs  []anthropic.MessageParam // real turns since last compaction; tail source
+	warned    bool
+	compactor compaction.Compactor
 }
 
 // Init freezes the system prompt + injection block for the session
@@ -59,7 +62,9 @@ func (a *Agent) Init(injection string) {
 // Turn runs one user turn to completion (text-only response).
 func (a *Agent) Turn(ctx context.Context, userText string) error {
 	a.Sess.User(userText)
-	a.msgs = append(a.msgs, anthropic.NewUserMessage(anthropic.NewTextBlock(userText)))
+	userMsg := anthropic.NewUserMessage(anthropic.NewTextBlock(userText))
+	a.msgs = append(a.msgs, userMsg)
+	a.turnMsgs = append(a.turnMsgs, userMsg)
 
 	for {
 		resp, err := a.Prov.Complete(ctx, a.Model, a.system, a.msgs, tools.Definitions(), 8192)
@@ -69,7 +74,9 @@ func (a *Agent) Turn(ctx context.Context, userText string) error {
 		pct := provider.CtxPct(resp.Usage, a.Prov.ContextWindow(a.Model))
 		a.Sess.Usage(resp.Usage.InputTokens, resp.Usage.OutputTokens, resp.Usage.CacheReadInputTokens, pct)
 
-		a.msgs = append(a.msgs, resp.ToParam())
+		respParam := resp.ToParam()
+		a.msgs = append(a.msgs, respParam)
+		a.turnMsgs = append(a.turnMsgs, respParam)
 		var results []anthropic.ContentBlockParamUnion
 		for _, block := range resp.Content {
 			switch v := block.AsAny().(type) {
@@ -91,6 +98,26 @@ func (a *Agent) Turn(ctx context.Context, userText string) error {
 			}
 		}
 
+		// §4.1 compaction: trigger at 85%, before the 95% hard stop.
+		// Guard: never compact mid-tool-use. If StopReason == ToolUse the
+		// assistant message just appended to turnMsgs contains a tool_use
+		// block with no matching tool_result yet; AssembleProviderView would
+		// produce an orphaned tool_result on the very next loop iteration.
+		// ShouldTrigger is still called so the pct reading advances the
+		// rearm state machine — but Run/Assemble are skipped.
+		if a.compactor.ShouldTrigger(pct) && resp.StopReason != anthropic.StopReasonToolUse {
+			fmt.Fprintf(a.Out, "\n[context at %d%%. running compaction...]\n", pct)
+			if err := a.compactor.Run(ctx, a.Prov, a.Model, a.system, a.msgs); err != nil {
+				// non-fatal: log and continue; worst case we hit 95% naturally
+				fmt.Fprintf(a.Out, "[compaction failed: %v; continuing]\n", err)
+			} else {
+				a.msgs = a.compactor.AssembleProviderView(a.turnMsgs)
+				a.turnMsgs = nil // reset: next tail window starts fresh
+				a.Sess.Compaction(pct)
+				fmt.Fprintf(a.Out, "[compaction done. context reset.]\n")
+			}
+		}
+
 		if pct >= 95 {
 			return ErrContextLimit
 		}
@@ -101,7 +128,9 @@ func (a *Agent) Turn(ctx context.Context, userText string) error {
 		if resp.StopReason != anthropic.StopReasonToolUse {
 			return nil
 		}
-		a.msgs = append(a.msgs, anthropic.NewUserMessage(results...))
+		toolResultMsg := anthropic.NewUserMessage(results...)
+		a.msgs = append(a.msgs, toolResultMsg)
+		a.turnMsgs = append(a.turnMsgs, toolResultMsg)
 	}
 }
 
