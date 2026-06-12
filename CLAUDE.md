@@ -17,3 +17,5 @@ hard rules:
   generation determinism, permission denylist, jsonl round-trip.
 - never use bare `echo` in shell examples or docs about the echo
   subsystem; disambiguate as "the echo pass" or `raqim echo`.
+- never delete anything under ~/.raqim/sessions or ~/.raqim/memory;
+  the reaper is the only deletion path.
