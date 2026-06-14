@@ -35,6 +35,11 @@ rules:
   exceptional justification.
 - never narrate the session ("we fixed the tests"). extract what a future
   session needs to know that it couldn't rediscover cheaply.
+- do not record facts that are plain from reading the code in under a minute
+  (a file's structure, a function's mechanics, named constants visible in the
+  source), or that are already captured in the injected memory index. record
+  only decisions, invariants, gotchas, or observed runtime behavior that the
+  code alone does not make obvious.
 - first paragraph of each body ≤120 words, self-contained.
 - NEVER include credentials, tokens, env values, or anything resembling a
   secret, even partially redacted.
