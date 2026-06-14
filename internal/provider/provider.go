@@ -40,9 +40,11 @@ func (a *Anthropic) Complete(ctx context.Context, model string, system []anthrop
 // Conservative 200k default; gen-1 can read the models api instead.
 func (a *Anthropic) ContextWindow(model string) int64 { return 200_000 }
 
-// CtxPct computes context consumption from response usage: everything the
-// next request will carry as input, as a percentage of the window.
+// CtxPct computes context consumption from response usage: the tokens that
+// will appear as input on the *next* request (input + cache_read +
+// cache_creation), as a percentage of the model's input context window.
+// Output tokens are excluded — they do not consume input context.
 func CtxPct(u anthropic.Usage, window int64) int {
-	used := u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens + u.OutputTokens
+	used := u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens
 	return int(used * 100 / window)
 }
