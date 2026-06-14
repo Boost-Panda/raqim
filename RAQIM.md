@@ -23,5 +23,16 @@ gen-1 dogfood tasks, in order:
    - `internal/agent`: turnMsgs split, mid-tool-use guard (StopReason check).
    commits: feat: compaction core · fix: mid-tool-use guard + re-arm
 2. kernel slimming — bring gen-0 back toward the ~800-line target.
-3. input handling — bracketed paste support (multi-line paste = one message)
-   and a sent-boundary marker after each user message.
+3. ✓ input handling — completed 2026-06-14.
+   - `cmd/raqim`: `readInput` coalesces bracketed-paste sequences
+     (ESC[200~…ESC[201~) into one turn; `[paste: N lines]` boundary marker.
+   - startup emits `\x1b[?2004h` to enable paste mode; all exit paths
+     (defer + signal handler) emit `\x1b[?2004l` to disable.
+   - `internal/echo`: `extractJSON` + `topLevelObjects` replace the
+     first-{-to-last-} slicer; handles ```json fences and multi-object
+     self-corrections; picks last valid {summary,entries} shape.
+
+open cosmetic:
+- bracketed-paste markers echo as literal ^[[200~/^[[201~ in the input
+  display; strip from echoed input — parsing is already correct, only the
+  on-screen echo is affected.

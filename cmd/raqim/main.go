@@ -142,6 +142,7 @@ func interactive(ctx context.Context, prov provider.Provider, cfg *config.Config
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-sig
+		fmt.Print("\x1b[?2004l") // disable bracketed paste before exit
 		fmt.Printf("\n[interrupt — session %s ending, running the echo pass]\n", sess.ID)
 		sess.End("interrupt")
 		if err := echo.Run(ctx, prov, cfg, sess.ID); err != nil {
@@ -165,16 +166,23 @@ func interactive(ctx context.Context, prov provider.Provider, cfg *config.Config
 		return endAndDistill("exit")
 	}
 
+	// Enable bracketed paste mode so the terminal wraps pastes in
+	// ESC[200~...ESC[201~ and readInput can coalesce them into one turn.
+	fmt.Print("\x1b[?2004h")
+	defer fmt.Print("\x1b[?2004l")
+
 	fmt.Printf("raqim · project %s · model %s · session %s (/exit to end)\n", project, cfg.Model.Agent, sess.ID)
 	for {
 		fmt.Print("\nraqim> ")
-		line, rerr := stdin.ReadString('\n')
-		text := strings.TrimSpace(line)
+		text, pasted, rerr := readInput(stdin)
 		if rerr != nil || text == "/exit" {
 			return endAndDistill("exit")
 		}
 		if text == "" {
 			continue
+		}
+		if pasted {
+			fmt.Printf("[paste: %d lines]\n", strings.Count(text, "\n")+1)
 		}
 		if err := a.Turn(ctx, text); err != nil {
 			if errors.Is(err, agent.ErrContextLimit) {
@@ -215,4 +223,39 @@ func flagUndistilledLogs(memPath string) {
 	for _, m := range matches {
 		fmt.Printf("[warn] undistilled echo output needs review: %s\n", m)
 	}
+}
+
+const (
+	pasteStart = "\x1b[200~"
+	pasteEnd   = "\x1b[201~"
+)
+
+// readInput reads one logical user message from r.
+// If the terminal sends a bracketed-paste sequence (ESC[200~ … ESC[201~),
+// all pasted lines are coalesced into a single message.
+// Returns ("", false, io.EOF) on closed stdin.
+func readInput(r *bufio.Reader) (text string, pasted bool, err error) {
+	line, err := r.ReadString('\n')
+	if line == "" {
+		return "", false, err
+	}
+	idx := strings.Index(line, pasteStart)
+	if idx < 0 {
+		return strings.TrimSpace(line), false, err
+	}
+	// Bracketed paste: accumulate lines until we see the paste-end marker.
+	var buf strings.Builder
+	buf.WriteString(line[idx+len(pasteStart):])
+	for !strings.Contains(buf.String(), pasteEnd) {
+		more, merr := r.ReadString('\n')
+		buf.WriteString(more)
+		if merr != nil {
+			break
+		}
+	}
+	result := buf.String()
+	if end := strings.Index(result, pasteEnd); end >= 0 {
+		result = result[:end]
+	}
+	return strings.Trim(result, "\r\n"), true, nil
 }
