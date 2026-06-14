@@ -58,6 +58,8 @@ type Compactor struct {
 	// Handoff is the structured handoff text produced by the most recent
 	// successful compaction. Empty until compaction runs.
 	Handoff string
+	// TriggerPct overrides the package-level TriggerPct constant when > 0.
+	TriggerPct int
 }
 
 // ShouldTrigger reports whether compaction should fire given the current
@@ -67,7 +69,11 @@ func (c *Compactor) ShouldTrigger(ctxPct int) bool {
 	if c.pending && ctxPct < RearmPct {
 		c.pending = false
 	}
-	return !c.pending && ctxPct >= TriggerPct
+	threshold := TriggerPct
+	if c.TriggerPct > 0 {
+		threshold = c.TriggerPct
+	}
+	return !c.pending && ctxPct >= threshold
 }
 
 // Run calls the agent model to produce a handoff, stores it in c.Handoff,

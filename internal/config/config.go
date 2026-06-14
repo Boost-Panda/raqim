@@ -31,7 +31,8 @@ type Memory struct {
 }
 
 type Context struct {
-	WarnPct int `toml:"warn_pct"`
+	WarnPct    int `toml:"warn_pct"`
+	CompactPct int `toml:"compact_pct"`
 }
 
 // MemConfig is the memory repo's own config.toml (memory-spec §8).
@@ -68,6 +69,7 @@ func Load() (*Config, error) {
 	cfg.Model.Echo = "claude-haiku-4-5"
 	cfg.Memory.Path = "~/.raqim/memory"
 	cfg.Context.WarnPct = 80
+	cfg.Context.CompactPct = 85
 	cfg.Projects = map[string][]string{}
 
 	if _, err := os.Stat(path); os.IsNotExist(err) {
@@ -81,6 +83,9 @@ func Load() (*Config, error) {
 	}
 	if cfg.Context.WarnPct == 0 {
 		cfg.Context.WarnPct = 80
+	}
+	if cfg.Context.CompactPct == 0 {
+		cfg.Context.CompactPct = 85
 	}
 	return cfg, nil
 }

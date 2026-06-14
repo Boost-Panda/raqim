@@ -40,7 +40,8 @@ type Agent struct {
 	Sess    *session.Session
 	ToolCtx *tools.Ctx
 	Out     io.Writer
-	WarnPct int
+	WarnPct    int
+	CompactPct int
 
 	system    []anthropic.TextBlockParam
 	msgs      []anthropic.MessageParam // provider view: what gets sent each request
@@ -56,6 +57,9 @@ func (a *Agent) Init(injection string) {
 	a.system = []anthropic.TextBlockParam{
 		{Text: systemPrompt},
 		{Text: injection, CacheControl: anthropic.NewCacheControlEphemeralParam()},
+	}
+	if a.CompactPct > 0 {
+		a.compactor.TriggerPct = a.CompactPct
 	}
 }
 

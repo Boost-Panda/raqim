@@ -43,7 +43,16 @@ func run() error {
 	prov := provider.NewAnthropic()
 	ctx := context.Background()
 
-	args := os.Args[1:]
+	// Parse top-level flags first (e.g. --compact-at on bare interactive).
+	// Subcommands (echo, reindex, run) are positional and come after flags.
+	fs := flag.NewFlagSet("raqim", flag.ExitOnError)
+	compactAt := fs.Int("compact-at", 0, "override compaction threshold (ctx_pct)")
+	fs.Parse(os.Args[1:])
+	if *compactAt > 0 {
+		cfg.Context.CompactPct = *compactAt
+	}
+
+	args := fs.Args() // non-flag arguments
 	cmd := ""
 	if len(args) > 0 {
 		cmd = args[0]
@@ -59,11 +68,16 @@ func run() error {
 	case "dream", "memory":
 		return fmt.Errorf("%q is reserved for a future gen", cmd)
 	case "run":
-		fs := flag.NewFlagSet("run", flag.ExitOnError)
-		p := fs.String("p", "", "one-shot prompt")
-		fs.Parse(args[1:])
+		rfs := flag.NewFlagSet("run", flag.ExitOnError)
+		p := rfs.String("p", "", "one-shot prompt")
+		runCompactAt := rfs.Int("compact-at", 0, "override compaction threshold (ctx_pct)")
+		rfs.Parse(args[1:])
 		if *p == "" {
 			return errors.New("usage: raqim run -p \"...\"")
+		}
+		// run-level flag takes precedence over top-level flag
+		if *runCompactAt > 0 {
+			cfg.Context.CompactPct = *runCompactAt
 		}
 		return interactive(ctx, prov, cfg, mc, *p)
 	case "":
@@ -115,7 +129,7 @@ func interactive(ctx context.Context, prov provider.Provider, cfg *config.Config
 	a := &agent.Agent{
 		Prov: prov, Model: cfg.Model.Agent,
 		Perm: permission.New(stdin, os.Stdout, cwd, config.RaqimDir()),
-		Sess: sess, Out: os.Stdout, WarnPct: cfg.Context.WarnPct,
+		Sess: sess, Out: os.Stdout, WarnPct: cfg.Context.WarnPct, CompactPct: cfg.Context.CompactPct,
 		ToolCtx: &tools.Ctx{Cwd: cwd, MemoryPath: memPath, Project: project, Touched: map[string]bool{}},
 	}
 	a.Init(memory.Inject(memPath, project, mc.Budgets.InjectTokens))
