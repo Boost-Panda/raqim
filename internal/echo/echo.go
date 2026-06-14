@@ -161,11 +161,7 @@ func callAndValidate(ctx context.Context, prov provider.Provider, model, input, 
 // ValidateOutput parses and schema-checks echo json (plan §3.7).
 func ValidateOutput(raw string) (rawOutput, []string) {
 	var out rawOutput
-	jsonStr := raw
-	if i := strings.Index(jsonStr, "{"); i >= 0 {
-		jsonStr = jsonStr[i : strings.LastIndex(jsonStr, "}")+1]
-	}
-	if err := json.Unmarshal([]byte(jsonStr), &out); err != nil {
+	if err := json.Unmarshal([]byte(extractJSON(raw)), &out); err != nil {
 		return out, []string{"not valid json: " + err.Error()}
 	}
 	var errs []string
@@ -245,6 +241,63 @@ func renderShaMap(m map[string]memory.Anchor) string {
 		lines = append(lines, fmt.Sprintf("%s (repo %s @ %s)", a.Path, a.Repo, a.SHA))
 	}
 	return strings.Join(lines, "\n")
+}
+
+// extractJSON returns the last JSON object in raw that unmarshals into the
+// expected {summary, entries[]} shape. It handles ```json fences and
+// multiple self-corrected objects by tracking brace depth rather than
+// slicing from first "{" to last "}". Falls back to raw if no valid
+// object is found so the caller gets a meaningful json.Unmarshal error.
+func extractJSON(raw string) string {
+	candidates := topLevelObjects(raw)
+	for i := len(candidates) - 1; i >= 0; i-- {
+		var probe rawOutput
+		if json.Unmarshal([]byte(candidates[i]), &probe) == nil && probe.Summary != "" {
+			return candidates[i]
+		}
+	}
+	return raw
+}
+
+// topLevelObjects scans s for complete top-level JSON objects {…} and
+// returns them in order. It is string-aware so braces inside JSON string
+// values are not mistaken for object boundaries.
+func topLevelObjects(s string) []string {
+	var out []string
+	depth, start := 0, -1
+	inStr, esc := false, false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if esc {
+			esc = false
+			continue
+		}
+		if c == '\\' && inStr {
+			esc = true
+			continue
+		}
+		if c == '"' {
+			inStr = !inStr
+			continue
+		}
+		if inStr {
+			continue
+		}
+		switch c {
+		case '{':
+			if depth == 0 {
+				start = i
+			}
+			depth++
+		case '}':
+			depth--
+			if depth == 0 && start >= 0 {
+				out = append(out, s[start:i+1])
+				start = -1
+			}
+		}
+	}
+	return out
 }
 
 // renderTranscript flattens jsonl events for the echo model. Echo always
