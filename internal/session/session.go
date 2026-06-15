@@ -56,14 +56,19 @@ func Dir() string {
 
 // New creates the jsonl file and writes the meta event.
 func New(project, model string) (*Session, error) {
+	return NewInDir(Dir(), project, model)
+}
+
+// NewInDir creates the jsonl file under dir (used by tests to avoid ~/.raqim).
+func NewInDir(dir, project, model string) (*Session, error) {
 	b := make([]byte, 2)
 	rand.Read(b)
 	id := fmt.Sprintf("s-%s-%s", time.Now().Format("20060102"), hex.EncodeToString(b))
-	dir := filepath.Join(Dir(), project)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	p := filepath.Join(dir, project)
+	if err := os.MkdirAll(p, 0o755); err != nil {
 		return nil, err
 	}
-	path := filepath.Join(dir, id+".jsonl")
+	path := filepath.Join(p, id+".jsonl")
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return nil, err

@@ -36,3 +36,13 @@ open cosmetic:
 - bracketed-paste markers echo as literal ^[[200~/^[[201~ in the input
   display; strip from echoed input — parsing is already correct, only the
   on-screen echo is affected.
+
+backlog:
+- auto-continue on max_tokens: the turn loop currently halts and returns
+  ErrMaxTokens when the response is truncated. for unattended/self-build
+  sessions, the loop should instead append the synthetic tool_result and
+  re-call Complete() so the model can finish in smaller steps without user
+  intervention. the synthetic guidance text ("produce a smaller output or
+  split the work into steps") is already in place; the loop just needs to
+  not return on max_tokens when a tool_use was in flight. guarded by
+  ErrMaxTokens sentinel + the comment in internal/agent/agent.go.

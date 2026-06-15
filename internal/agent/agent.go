@@ -25,6 +25,16 @@ var ErrContextLimit = errors.New("context limit reached")
 // the session with reason exit and runs the echo pass.
 var ErrUserExit = errors.New("user ended session at permission prompt")
 
+// ErrMaxTokens signals the response was cut off at the output token limit.
+// The turn loop appends synthetic tool_results so a.msgs stays API-valid,
+// then returns this error. The caller should surface it to the user.
+//
+// TODO(backlog): truncation currently halts the turn; for unattended/self-build
+// sessions, a future version should append the synthetic result and auto-continue
+// the loop so the model can finish in smaller steps without user intervention.
+// See RAQIM.md backlog.
+var ErrMaxTokens = errors.New("response truncated: output token limit reached")
+
 const systemPrompt = `you are raqim, a coding harness with persistent memory. you work inside the user's repository: read code before changing it, make minimal correct changes, and verify with the project's own tools (tests, builds) when you can.
 
 tools: read, write, edit, bash, memory_search. tool calls run serially and may be denied by the user; a denial includes their reason — adapt to it instead of retrying. keep bash commands non-interactive.
@@ -42,6 +52,7 @@ type Agent struct {
 	Out     io.Writer
 	WarnPct    int
 	CompactPct int
+	MaxTokens  int64 // output token ceiling per request; 0 → default 16384
 
 	system    []anthropic.TextBlockParam
 	msgs      []anthropic.MessageParam // provider view: what gets sent each request
@@ -71,7 +82,7 @@ func (a *Agent) Turn(ctx context.Context, userText string) error {
 	a.turnMsgs = append(a.turnMsgs, userMsg)
 
 	for {
-		resp, err := a.Prov.Complete(ctx, a.Model, a.system, a.msgs, tools.Definitions(), 8192)
+		resp, err := a.Prov.Complete(ctx, a.Model, a.system, a.msgs, tools.Definitions(), a.maxTokens())
 		if err != nil {
 			return err
 		}
@@ -90,16 +101,38 @@ func (a *Agent) Turn(ctx context.Context, userText string) error {
 			case anthropic.ToolUseBlock:
 				args := json.RawMessage(v.JSON.Input.Raw())
 				a.Sess.ToolCall(v.ID, v.Name, args)
-				out, ok, exit := a.runTool(v.Name, args)
-				a.Sess.ToolResult(v.ID, ok, out)
-				if exit {
-					return ErrUserExit
+				if resp.StopReason == anthropic.StopReasonMaxTokens {
+					// Do not execute — the response was truncated and tool
+					// inputs are likely empty or incomplete. Emit a synthetic
+					// tool_result so a.msgs stays API-valid.
+					const guidance = "tool call truncated — the response hit the output token limit before the tool input was complete. this tool did NOT run. produce a smaller output or split the work into steps."
+					a.Sess.ToolResult(v.ID, false, guidance)
+					results = append(results, anthropic.NewToolResultBlock(v.ID, guidance, true))
+				} else {
+					out, ok, exit := a.runTool(v.Name, args)
+					a.Sess.ToolResult(v.ID, ok, out)
+					if exit {
+						return ErrUserExit
+					}
+					if len(out) > session.OutputCap {
+						out = out[:session.OutputCap] + "\n[output truncated]"
+					}
+					results = append(results, anthropic.NewToolResultBlock(v.ID, out, !ok))
 				}
-				if len(out) > session.OutputCap {
-					out = out[:session.OutputCap] + "\n[output truncated]"
-				}
-				results = append(results, anthropic.NewToolResultBlock(v.ID, out, !ok))
 			}
+		}
+
+		// max_tokens: the model was cut off. Surface the error to the caller;
+		// tool_results (if any) are already in results and must be committed
+		// to a.msgs so the conversation stays API-valid for any future call.
+		if resp.StopReason == anthropic.StopReasonMaxTokens {
+			fmt.Fprintln(a.Out, "\n[response truncated: output token limit reached; please retry]")
+			if len(results) > 0 {
+				toolResultMsg := anthropic.NewUserMessage(results...)
+				a.msgs = append(a.msgs, toolResultMsg)
+				a.turnMsgs = append(a.turnMsgs, toolResultMsg)
+			}
+			return ErrMaxTokens
 		}
 
 		// §4.1 compaction: trigger at 85%, before the 95% hard stop.
@@ -136,6 +169,13 @@ func (a *Agent) Turn(ctx context.Context, userText string) error {
 		a.msgs = append(a.msgs, toolResultMsg)
 		a.turnMsgs = append(a.turnMsgs, toolResultMsg)
 	}
+}
+
+func (a *Agent) maxTokens() int64 {
+	if a.MaxTokens > 0 {
+		return a.MaxTokens
+	}
+	return 16384
 }
 
 func (a *Agent) runTool(name string, args json.RawMessage) (out string, ok, exit bool) {
